@@ -1,0 +1,630 @@
+ require(Rcpp);
+ require(RcppArmadillo);
+ require(RcppNumerical);
+
+ 
+## generate the model matrix; 
+model.matix = function(K0)
+{
+	
+	if (K0==1)  model.matrix = matrix(c(1,0),nrow=2,ncol=1)
+	if (K0==2)  model.matrix = as.matrix(expand.grid(c(1,0),c(1,0)))
+	if (K0==3)  model.matrix = as.matrix(expand.grid(c(1,0),c(1,0),c(1,0)))
+	if (K0==4)  model.matrix = as.matrix(expand.grid(c(1,0),c(1,0),c(1,0),c(1,0)))
+	if (K0==5)  model.matrix = as.matrix(expand.grid(c(1,0),c(1,0),c(1,0),c(1,0),c(1,0)))
+
+	colnames(model.matrix) <- NULL
+	
+	num.null = c(apply((model.matrix==1),1,sum));
+	
+	model.matrix = model.matrix[order(num.null),]
+	if (K0==1) model.matrix = matrix(model.matrix,nrow=2,ncol=1)
+	if (K0!=1)model.matrix = model.matrix[, ncol(model.matrix):1]
+	
+	return(model.matrix);
+}
+ 
+ 
+ 
+sourceCpp(code='
+ 
+   // [[Rcpp::depends(RcppArmadillo)]]
+   // [[Rcpp::depends(RcppEigen)]]
+   // [[Rcpp::depends(RcppNumerical)]]
+   
+   #include <RcppArmadillo.h>
+   #include <RcppNumerical.h>   
+   #include <vector>
+   
+   using namespace Rcpp;
+   using namespace Numer;  
+   
+	//#define DEBUG_PRINT 
+
+	
+	class binaryIntegrand: public Func
+	{
+		private:
+			double a1;
+			double b1;
+			
+			double a2;
+			double b2;
+		public:
+			binaryIntegrand(double a1_, double b1_, double a2_, double b2_) : a1(a1_), b1(b1_), a2(a2_), b2(b2_) {}
+
+			double operator()(const double& x) const
+			{
+				return R::dbeta(x,a1,b1,0)*R::pbeta(x,a2,b2,0,0);
+			}
+	};    
+ 
+	// [[Rcpp::export]]
+	Rcpp::List integrate_binary(double a1, double b1, double a2, double b2)
+	{
+		const double lower = 0.0000000001, upper = 1-lower;
+
+		binaryIntegrand f(a1,b1,a2,b2);
+		double err_est;
+		int err_code;
+		const double res = integrate(f, lower, upper, err_est, err_code);
+		
+		
+		//Rcout << a1 << "-" << b1 << "-" << a2 << "-" << b2 << res << "-" << err_est << "-" << err_code << std::endl;
+		
+		return Rcpp::List::create(
+			Rcpp::Named("approximate") = res,
+			Rcpp::Named("error_estimate") = err_est,
+			Rcpp::Named("error_code") = err_code
+		);
+	}    
+   
+	class continuousIntegrand: public Func
+	{
+		private:
+			double loc1,scale1,df1,
+			       loc2,scale2,df2;
+
+		public:
+			continuousIntegrand(double loc1_, double scale1_, double df1_,  
+								double loc2_, double scale2_, double df2_) : 
+								loc1(loc1_), scale1(scale1_), df1(df1_), 
+								loc2(loc2_), scale2(scale2_), df2(df2_){}
+			
+			double operator()(const double & x) const
+			{
+				double x1  = (x-loc1)*scale1;
+				double x2  = (x-loc2)*scale2;			
+				
+				return scale1*R::dt(x1,df1,0)*R::pt(x2,df2,0,0);
+			}
+	};    
+	   
+	 // [[Rcpp::export]]
+	Rcpp::List integrate_continuous(double loc1, double scale1, double df1, double loc2, double scale2, double df2)
+	{
+
+		const double lower = std::min(loc1-10/scale1,loc2-10/scale2);
+		const double upper = std::max(loc1+10/scale1,loc2+10/scale2);
+
+
+		continuousIntegrand f(loc1,scale1,df1,loc2,scale2,df2);
+		double err_est;
+		int err_code;
+		const double res = integrate(f, lower, upper, err_est, err_code);
+
+		return Rcpp::List::create(
+			Rcpp::Named("approximate") = res,
+			Rcpp::Named("error_estimate") = err_est,
+			Rcpp::Named("error_code") = err_code
+		);
+	}    
+   
+   
+   
+   // basket trial data object;
+   class datObj {
+       public:
+   
+		int z;     /* treatment group **/
+		double y;  /* y could be binary, count, or continuous */
+		int b;
+		double et;
+		double at;
+		double ft;
+   };   
+
+   // basket trial data summary statistic object (basket summary statistics);
+   class basketSumStat {
+       public:
+   
+		double n[2];
+		double y[2];
+		double ss[2];
+   };  
+
+   
+	// function to order patient data by time to outcome ascertainment;
+	 bool compare_follow_up_time(const datObj &a, const datObj &b)
+	{
+			return a.ft < b.ft;
+	}   
+   
+   
+   // [[Rcpp::export]]
+   Rcpp::List BMA_Design (int nSims, CharacterVector dataTypes, arma::irowvec nMaxBasket, arma::vec ppEffCrit, arma::vec ppFutCrit,
+                          arma::vec eParms, arma::mat oParms, arma::imat models, arma::rowvec pmp, Rcpp::List priorStats, double a0, Rcpp::List trueParms)
+   {   
+   
+   		// initialize random number generator;
+		RNGScope scope;  
+
+		// calculate the number of baskets;
+   		int K0 = dataTypes.size();	
+
+		// calculate the number of models in model space;
+		int M0 = models.n_rows;
+
+
+		// containers for simulation results;
+		arma::mat all_PostProbs(nSims,K0);
+		arma::mat all_PostMeans(nSims,K0);
+		arma::mat all_Efficacy(nSims,K0     ,arma::fill::zeros);
+		arma::mat all_Futility(nSims,K0     ,arma::fill::zeros);
+		arma::mat all_Indeterminate(nSims,K0,arma::fill::zeros);
+		arma::mat all_n(nSims,K0,arma::fill::zeros);
+		
+		
+		arma::mat all_durations(nSims,K0,arma::fill::zeros);
+		arma::vec all_fwr(nSims,arma::fill::zeros);
+		arma::vec all_numRejectCorrect(nSims,arma::fill::zeros);		
+		
+		// set initial priors for binary and continuous model parameters;
+			
+			// binary (beta prior);
+			double alpha0 = 0.001;
+			double beta0  = 0.001;
+		
+			// continuous (improper prior, numerator for the power on tau, denominator is 2)
+			double d0 = -1;
+		
+		// convert prior model probabilities to the log scale;
+		arma::rowvec log_prior_model_prob = log(pmp);		
+		
+		// calculate total number of subjects;
+		int nMax = sum(nMaxBasket);
+		
+		// calculate enrollment distrution scale parameters;
+		arma::vec eScales = 1.0 / eParms;		
+		
+
+		// create container for prior summary statistics;
+		// pss = prior summary statistics;
+		std::vector<basketSumStat> pss(K0);
+		for (int k=0;k<K0;k++)
+		{
+			basketSumStat dat;
+			
+			for (int z=0;z<=1;z++)
+			{
+				dat.n[z] = 0.5*nMaxBasket[k]*a0;
+
+				if (dataTypes[k]=="BINARY")
+				{
+					dat.y[z]  = as<arma::vec>( priorStats[k] )[z] * dat.n[z];
+				}
+				else if (dataTypes[k]=="NORMAL")
+				{
+					dat.y[z]  = as<arma::vec>( priorStats[k] )[z];
+				}
+			}	
+			pss[k] = dat;
+		}  		
+		
+		// create container for data generation parameters;
+		// dgp = data generation parameters;
+		std::vector<arma::mat> dgp(K0);
+		for (int k=0;k<K0;k++)
+		{
+		
+			if (dataTypes[k]=="BINARY")
+			{
+				dgp[k].set_size(2,1);
+				dgp[k].col(0) = as<arma::vec>( trueParms[k] );	                      // response rate;			
+			}
+			else if (dataTypes[k]=="NORMAL")
+			{			
+				dgp[k].set_size(2,2);
+				dgp[k].col(0)  = as<arma::vec>( as<Rcpp::List>( trueParms[k] )[0] ) ; // means 
+				dgp[k].col(1)  = as<arma::vec>( as<Rcpp::List>( trueParms[k] )[1] ) ; // standard deviations
+			}		
+		}
+		
+
+		for (int s=0;s<nSims;s++)
+		{
+			// allocate a data object for one subject;
+			datObj d;
+			
+			// allocate data object container for all possible subjects;
+			std::vector<datObj> bData(nMax);
+			
+			// allocate data object container for sufficient statistics;
+			std::vector<arma::mat> suff_stat(K0);
+			std::vector<arma::mat> summ_stat(K0);
+			
+			// simulate the data for all subjects and baskets;
+			int idx=0;
+			for (int k=0;k<K0;k++)
+			{
+			
+				if (dataTypes[k]=="BINARY")
+				{
+					suff_stat[k].set_size(2,2);	
+					summ_stat[k].set_size(2,2);						
+				}
+				else if (dataTypes[k]=="NORMAL")
+				{
+					suff_stat[k].set_size(2,3);
+					summ_stat[k].set_size(2,3);	
+				}	
+
+				suff_stat[k].zeros();				
+				summ_stat[k].zeros();	
+
+				
+				double cumTime = 0;
+				for (int n=0;n<nMaxBasket[k];n++)
+				{
+					d.b       = k;
+					cumTime   = cumTime + R::rexp(eScales[k]);
+					d.et      = cumTime;                           // simulate enrollment time;
+					d.at      = R::rnorm(oParms[0],oParms[1]);     // simulate response ascertainment time;
+					d.ft      = d.et + d.at;                       // calculate total follow-up time;
+					
+					d.z       = R::rbinom(1,0.5);                  // simulate 1:1 randomization;
+					
+					// simulate response;
+					if (dataTypes[k]=="BINARY")
+					{
+						d.y       = R::rbinom(1,dgp[k](d.z,0)); 
+					}
+					else if (dataTypes[k]=="NORMAL")
+					{
+						d.y       = R::rnorm(dgp[k](d.z,0),dgp[k](d.z,1)); 
+					}
+					bData[idx] = d;
+					idx++;
+				}
+
+			}
+
+			// put the data in chronological order based on outcome ascertainment;
+			std::sort(bData.begin(), bData.end(), compare_follow_up_time);			
+			
+			
+			// determine the time at which each of the K0 analyses takes place;
+			arma::irowvec nCount(K0,arma::fill::zeros);
+			arma::irowvec unsorted_nTrig(K0,arma::fill::zeros);
+			arma::rowvec  duration(K0,arma::fill::zeros);
+			for (int n=0;n<nMax;n++)
+			{
+				int k = bData[n].b;
+				nCount[k]+=1;
+				
+				if ( nCount[k]==nMaxBasket[k] ) 
+				{ 
+					unsorted_nTrig[k]    = n; 
+					duration[k] = bData[n].ft;
+				}
+			}
+			arma::irowvec nTrig = sort(unsorted_nTrig);
+			
+			#ifdef DEBUG_PRINT
+			Rcout << unsorted_nTrig << std::endl << nTrig << std::endl << duration << std::endl;
+			#endif 
+			
+			// container for whether enrollment is open in a basket (1=Yes;0=No)
+			arma::irowvec active(K0,arma::fill::ones);			
+			
+			// hypothesis testing result for basket (1=Efficacy;-1=Futility;0=Indeterminate)
+			arma::irowvec decision(K0,arma::fill::zeros);
+		
+	
+			// containers for final study results;
+			arma::rowvec basket_specific_pp(K0, arma::fill::zeros);				
+			arma::rowvec basket_specific_mn(K0, arma::fill::zeros);
+
+			// containers for final study data;
+			arma::irowvec nVec(K0, arma::fill::zeros);	
+
+			// loop over K0 analyzes;
+			for (int i=0;i<K0;i++)
+			{
+
+				// ---------------------------------------------------------------------------------------------------
+				//accumulate data up to current interim analysis;	
+				
+				int nStart,nStop;
+				if (i==0) 
+				{
+					nStart = 0; 
+					nStop  = nTrig[i];
+				}
+				else
+				{
+					nStart = nTrig[i-1]+1;
+					nStop  = nTrig[i];
+				}
+			
+				for (int n=nStart;n<=nStop;n++)
+				{
+					int b       = bData[n].b;         // basket for current observation;
+					
+					if (active[b]==1)
+					{
+						int z       = bData[n].z;     // treatment group for current basket;
+						
+						double y    = bData[n].y;	  // data value for current observation;
+
+						nVec[b]     +=1;			  // increment sample size for basket;
+						
+						suff_stat[b](z,0) += 1;       // increment sample size for treatment group within basket;
+						suff_stat[b](z,1) += y;       // increment sum of values for treatment group within basket;
+						
+						if (dataTypes[b]=="NORMAL")
+						{
+							suff_stat[b](z,2) += y*y; // increment sum of squares for treatment group within basket;
+						}			
+					}
+				}
+				
+				// ---------------------------------------------------------------------------------------------------
+				// compute summary statistics based on current data;
+				// bss = basket summary statistics;
+				std::vector<basketSumStat> bss(K0);
+				
+				for (int k=0;k<K0;k++)
+				{
+					basketSumStat dat;
+					
+					for (int z=0;z<=1;z++)
+					{
+						dat.n[z] = suff_stat[k](z,0);
+						dat.y[z] = suff_stat[k](z,1);
+						
+						if (dataTypes[k]=="NORMAL")
+						{
+							dat.y[z]  = dat.y[z]/dat.n[z];
+							dat.ss[z] = suff_stat[k](z,2);
+						}
+					}			
+					bss[k] = dat;
+				}  
+				
+				
+				// ---------------------------------------------------------------------------------------------------
+				// compute BMA posterior inference quantities;
+						
+				// compute posterior quantities for each scenario and basket;
+				// this is done avoid redundant integrations which are costly;
+				
+				arma::mat unique_pp(2,K0,arma::fill::zeros);
+				arma::mat unique_mn(2,K0,arma::fill::zeros);
+				arma::mat unique_ml(2,K0,arma::fill::zeros);	
+				
+				for (int k=0;k<K0;k++)
+				{
+					for (int h=0;h<=1;h++)
+					{
+						
+						if (dataTypes[k]=="BINARY")
+						{
+							double margLikeValue = 0;
+							double alpha[2];
+							double beta[2];
+							
+							for (int z=0;z<=1;z++)
+							{
+								int hh = z*h; // always zero for control group;
+								
+								alpha[z] =  pss[k].y[hh]                 + alpha0;
+								beta[z]  = (pss[k].n[hh] - pss[k].y[hh]) + beta0;	
+
+								margLikeValue += lgamma(alpha[z] + beta[z]) - lgamma(alpha[z]) - lgamma(beta[z]);
+
+								alpha[z] +=  bss[k].y[z];
+								beta[z]  += (bss[k].n[z] - bss[k].y[z]);	
+								
+								margLikeValue += lgamma(alpha[z]) + lgamma(beta[z]) - lgamma(alpha[z] + beta[z]);
+							}
+							
+							Rcpp::List int_res = integrate_binary(alpha[0],beta[0],alpha[1],beta[1]);
+														
+							unique_pp(h,k) = as<double>(int_res[0]);
+							unique_mn(h,k) = alpha[1] / (alpha[1] + beta[1]) - alpha[0] / (alpha[0] + beta[0]);
+							unique_ml(h,k) = margLikeValue;
+						}
+						else if (dataTypes[k]=="NORMAL")
+						{
+							double margLikeValue = 0;
+							double loc[2];
+							double scale[2];
+							double df[2];
+							
+							
+							double 
+								   shape1,rate1,
+							       n0,y0,
+								   n1,ss1,y1,
+								   nHat,mu0Hat,alpha0Hat,beta0Hat;
+								   
+							for (int z=0;z<=1;z++)
+							{
+								int hh = z*h; // always zero for control group;
+								
+								// read prior summary statistics;
+								n0  = pss[k].n[hh]; 
+								y0  = pss[k].y[hh];
+
+								// read in current data summary statistics;
+								n1  = bss[k].n[z];
+								y1  = bss[k].y[z];
+								ss1 = bss[k].ss[z];
+								
+								// compute needed quantities;
+								nHat      = n1+n0;
+								mu0Hat    = (n1*y1 + n0*y0)/nHat;
+								alpha0Hat = n1  + 0.1; 
+								beta0Hat  = ss1 + n0*pow(y0,2) - nHat*pow(mu0Hat,2) + 0.1;
+								
+								// compute marginal likelihood contribution;
+								margLikeValue -=  0.5*alpha0Hat*log(0.5*beta0Hat);
+								
+								loc[z]   = mu0Hat;
+								scale[z] = sqrt(alpha0Hat*nHat/beta0Hat);
+								df[z]    = alpha0Hat;					
+							}
+							
+							Rcpp::List int_res = integrate_continuous(loc[0],scale[0],df[0],loc[1],scale[1],df[1]);
+														
+							unique_pp(h,k) = as<double>(int_res[0]);
+							unique_mn(h,k) = loc[1] - loc[0];
+							unique_ml(h,k) = margLikeValue;							
+							
+							
+						}						
+					}	
+				}
+
+				
+				
+
+				// using pre-computed unique quantities, write out full model-space quantities;
+				arma::rowvec ppModel = log_prior_model_prob;    // container for posterior model probability container; 	
+				arma::mat pp(M0,K0,arma::fill::zeros);          // container for model-specific posterior probabilities for efficacy;
+				arma::mat mn(M0,K0,arma::fill::zeros);          // container for model-specific posterior means;
+				
+				
+				for (int m=0;m<M0;m++)
+				{				
+					for (int k=0;k<K0;k++)
+					{	
+						int h = models(m,k);
+						ppModel[m] += unique_ml(h,k);
+						pp(m,k)    += unique_pp(h,k);
+						mn(m,k)    += unique_mn(h,k);
+					}
+				}
+				
+				
+				double modMax = max(ppModel),sumProb;
+				ppModel = exp(ppModel - modMax);
+				sumProb = sum(ppModel);
+				ppModel = ppModel / sumProb;
+				
+
+				// compute model averaged posterior mean and posterior probability of efficacy;
+				basket_specific_pp = ppModel * pp;
+				basket_specific_mn = ppModel * mn;
+				
+
+				for (int k=0;k<K0;k++)
+				{
+
+					if      ((basket_specific_pp[k]>=ppEffCrit[k]) and (nVec[k] == nMaxBasket[k])                                           ) { active[k] = 0; decision[k] =  1;   }
+					else if ((basket_specific_pp[k]<=ppFutCrit[k]) and (nVec[k] >= (int) nMaxBasket[k]*0.5) and  (nVec[k] <  nMaxBasket[k]) ) { active[k] = 0; decision[k] = -1;   }					
+	
+				}
+				
+				if (max(active)==0) 
+				{ 
+					i=10000;
+				}	
+
+				#ifdef DEBUG_PRINT
+					Rcout << "Current Enrollment = " << nVec << " " << sum(nVec) << std::endl;
+					Rcout << "Currently Active = " << active << std::endl;
+				#endif 
+
+				
+			}
+			all_PostProbs.row(s)     = basket_specific_pp;
+			all_PostMeans.row(s)     = basket_specific_mn;
+			
+				for (int k=0;k<K0;k++)
+				{
+					if (decision[k]==1)       {all_Efficacy(s,k) = 1.0;     }
+					else if (decision[k]==-1) {all_Futility(s,k) = 1.0;     }
+					else                      {all_Indeterminate(s,k) = 1.0;}	
+					
+					if ((decision[k]==1) and (dgp[k](0,0)>=dgp[k](1,0))) { all_fwr[s] = 1;}
+					if ((decision[k]==1) and (dgp[k](0,0)< dgp[k](1,0))) { all_numRejectCorrect[s] += 1; }
+					
+					
+					
+				}			
+
+			arma::rowvec nVecDouble = arma::conv_to<arma::rowvec>::from(nVec);				
+			all_n.row(s) = nVecDouble;
+			all_durations.row(s) = duration;				
+		}
+ 
+		/*
+		Rcpp::List Inputs =  Rcpp::List::create(
+									Rcpp::Named("data.types")              = dataTypes,
+									Rcpp::Named("nMax.basket")             = nMaxBasket,
+									Rcpp::Named("model.space")             = models,
+									Rcpp::Named("prior.model.probs")       = pmp,
+									Rcpp::Named("conjugate.prior.stats")   = priorStats,
+									Rcpp::Named("a0")                      = a0,
+									Rcpp::Named("prior.stats")             = trueParms
+								);
+		return Inputs;
+		*/
+		
+		
+		
+		
+		Rcpp::List PE = Rcpp::List::create(  
+											Rcpp::Named("pm")       = mean(all_PostMeans),
+											Rcpp::Named("pp")       = mean(all_PostProbs)
+										  );
+														
+		Rcpp::List HT = Rcpp::List::create(  
+											Rcpp::Named("eff")      = mean(all_Efficacy),								  
+											Rcpp::Named("fut")      = mean(all_Futility),								  
+											Rcpp::Named("ind")      = mean(all_Indeterminate),
+											Rcpp::Named("fwer")     = mean(all_fwr),
+											Rcpp::Named("ncr")      = mean(all_numRejectCorrect)
+										  );
+																												
+		Rcpp::List SS = Rcpp::List::create(  
+											Rcpp::Named("ave")         = mean(all_n),
+											Rcpp::Named("med")         = median(all_n),								  
+											Rcpp::Named("min")         = min(all_n),
+											Rcpp::Named("max")         = max(all_n)	
+										  );														
+														
+		Rcpp::List DU = Rcpp::List::create(  
+											Rcpp::Named("ave")      = mean(all_durations),
+											Rcpp::Named("med")      = median(all_durations),								  
+											Rcpp::Named("min")      = min(all_durations),
+											Rcpp::Named("max")      = max(all_durations)		
+										  );	
+
+
+
+										  
+		return Rcpp::List::create(
+									Rcpp::Named("PE")    = PE,
+									Rcpp::Named("HT")    = HT,	
+									Rcpp::Named("SS")    = SS,									
+									Rcpp::Named("DR")    = DU							  			  
+								);
+
+		
+	}
+   
+'
+)
