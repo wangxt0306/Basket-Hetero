@@ -1,0 +1,867 @@
+ require(Rcpp);
+ require(RcppArmadillo);
+ require(RcppNumerical);
+ 
+sourceCpp(code='
+ 
+   // [[Rcpp::depends(RcppArmadillo)]]
+   // [[Rcpp::depends(RcppEigen)]]
+   // [[Rcpp::depends(RcppNumerical)]]
+   #include <RcppArmadillo.h>
+   #include <RcppNumerical.h> 
+   #include <RcppArmadilloExtensions/sample.h>
+   
+#include <cmath>
+#include <random>
+#include <string>
+#include <vector>
+   
+   using namespace Rcpp;
+   using namespace Numer; 
+
+   // basket trial data summary statistic object (basket summary statistics);
+    class basketSumStat {
+       public:
+   
+		arma::mat n{arma::mat(2,2)};
+		arma::mat y{arma::mat(2,2)};
+		arma::mat sd{arma::mat(2,2)};
+    };  
+   
+   // basket trial data object;
+    class datObj {
+       public:
+   
+		int z;     /* treatment group **/
+		int bc;    /* baseline covariate */
+		double y;  /* y could be binary, count, or continuous */
+		int q;
+		double et;
+		double at;
+		double ft;
+    };   
+	
+	// function to order patient data by time to outcome ascertainment;
+	bool compare_follow_up_time(const datObj &a, const datObj &c)
+	{
+			return a.ft < c.ft;
+	}   
+	
+	
+// full conditional likelihood and conjugate prior functions;
+class glm_mcmc{
+
+        public:
+	
+	    int K0;                               // number of indications
+	    arma::vec              nMaxBasket;    // sample size
+	    Rcpp::List             priorStats;    // prior statistics n, y_bar, (sd)
+	    arma::vec              piZ;           // treatment distribution  
+	    std::vector<arma::vec> piX;           // baseline covariate distribution  
+	
+	    // model definition
+	    std::vector<std::string> dataTypes;
+	    std::vector<std::string> dLinks;
+	    std::vector<arma::vec>   trueParms;
+		
+	    std::vector<int> P;
+		arma::vec        t;
+	    arma::mat        grid;
+		
+	    // prior information 
+	    arma::vec              a0;                     // vector of powers for power priors
+        arma::vec              pmp;                    // prior model probability
+	    std::vector<arma::vec> c_inv;                  // normalized constants
+		arma::vec              cov;                    // convariate indicator
+		
+	    // slice sampling
+	    std::vector<arma::vec>   lower_limits;
+	    arma::vec                upper_limits;
+	    arma::vec                slice_widths;
+	    int m;
+	
+	    std::vector<basketSumStat> pss;
+		std::vector<basketSumStat> oss;
+		
+    // public member functions;
+	glm_mcmc(std::vector<std::string> & dataTypes, std::vector<std::string> & dLinks, arma::vec & nMaxBasket, int & K0, arma::vec & pmp, Rcpp::List & priorStats, 
+	         arma::vec & a0, std::vector<arma::vec> & trueParms, std::vector<arma::vec> & c_inv, arma::vec & piZ, std::vector<arma::vec> & piX, 
+			 std::vector<arma::vec> & lower_limits, arma::vec & upper_limits, arma::vec & slice_widths, std::vector<basketSumStat> & pss, std::vector<basketSumStat> & oss,
+			 arma::vec & cov);
+	
+	double logCP(const arma::vec & parm0, const int & j, const int & h, const arma::vec & cov);    // log of conjugate priors 
+    double logFC(const arma::vec & parm0, const int & j, const arma::vec & cov);                   // log of full conditional likelihood	
+};
+	
+glm_mcmc::glm_mcmc(std::vector<std::string> & dataTypes0, std::vector<std::string> & dLinks0, arma::vec & nMaxBasket0, int & K00, arma::vec & pmp0, 
+                   Rcpp::List & priorStats0, arma::vec & a00, std::vector<arma::vec> & trueParms0, std::vector<arma::vec> & c_inv0, arma::vec & piZ0, 
+				   std::vector<arma::vec> & piX0, std::vector<arma::vec> & lower_limits0, arma::vec & upper_limits0, arma::vec & slice_widths0, 
+				   std::vector<basketSumStat> & pss0, std::vector<basketSumStat> & oss0, arma::vec & cov0)
+{
+	K0         = K00;
+	nMaxBasket = nMaxBasket0;
+	priorStats = priorStats0;
+	piZ        = piZ0;
+	piX        = piX0;
+	
+	dataTypes  = dataTypes0;
+	dLinks     = dLinks0;
+	trueParms  = trueParms0;
+	
+	a0         = a00;
+	c_inv      = c_inv0;
+	pmp        = pmp0;
+	cov        = cov0;
+	
+    P.resize(K0);
+    for (int i=0;i<K0;i++)
+	{
+	    P[i] = 2 + (int)(cov[i]==1) + 2*(int)(dataTypes[i]=="Normal");
+	}
+	
+	// create the grid table
+	grid.resize(pow(2,K0),K0);
+	t = {0,1};
+	for (int k=0;k<K0;k++)
+	{
+	    grid.col(k) = repmat( repelem(t,pow(2,K0-k-1),1), pow(2,k),1 );
+	}
+	
+	lower_limits = lower_limits0;
+	upper_limits = upper_limits0;
+	slice_widths = slice_widths0;
+	
+	m=10;
+	
+	pss = pss0;
+	oss = oss0;
+}	
+
+// compute means under different dLinks;
+double means(const double & eta, std::string & dLink)
+{
+	double mean;
+	
+	if (dLink=="Logistic") 		    { mean = exp(eta) / (1 + exp(eta)); 		    	}	
+	if (dLink=="Log") 	   		    { mean = exp(eta); 				    				}	
+    if (dLink=="Identity")	        { mean = eta;                                       }
+	
+	return mean;
+}	
+
+// compute pessimistic and enthusiastic priors;
+double glm_mcmc::logCP(const arma::vec & parm0, const int & j, const int & h, const arma::vec & cov)  
+{
+	// extract regression parameters;
+	arma::vec theta0 = parm0;
+    double eta, mean, lc = 0, n, y, sd;
+	
+	if (cov[j] == 0)
+	{
+	    for (int z=0;z<2;z++)
+	    {
+	        int hh = z*h;
+	
+	        n = pss[j].n(0,hh);
+			y = pss[j].y(0,hh);
+            if (dataTypes[j]=="Normal")
+	        {	
+		        sd = pss[j].sd(0,hh);
+	        }       
+	    
+	        eta = theta0[0]+theta0[1]*z; 
+	        if (dLinks[j]=="Logistic") 		    { mean = exp(eta) / (1 + exp(eta)); 		    	}	
+	        if (dLinks[j]=="Log") 	   		    { mean = exp(eta); 				    				}	
+            if (dLinks[j]=="Identity")	        { mean = eta;                                       }
+
+	        // compute conjugate power prior;
+	        if ( (dataTypes[j]=="Bernoulli") | (dataTypes[j]=="Binomial") )
+	        {	
+	            lc += a0[j]*( y * log(mean) + (n-y) * log(1-mean) );  				
+	        }
+	        if (dataTypes[j]=="Normal")
+	        {	
+				lc += a0[j]*( n*log(theta0[2+z])/2 - theta0[2+z]*( (n-1)*sd*sd+n*(y-mean)*(y-mean) )/2);
+				lc += (0.1-1)*log(theta0[2+z]) - 0.1*theta0[2+z];
+            }	
+        }			
+	}
+	else if (cov[j] == 1)
+	{
+	  for (int z=0;z<2;z++)
+	  {
+	    int hh = z*h;
+	    for (int x=0;x<2;x++)
+	    {
+	        n = pss[j].n(x,hh);
+			y = pss[j].y(x,hh);
+	        if (dataTypes[j]=="Normal")
+	        {	
+		        sd = pss[j].sd(x,hh);
+	        }         
+	    
+	        eta = theta0[0]+theta0[1]*z+theta0[2]*x; 
+	        if (dLinks[j]=="Logistic") 		    { mean = exp(eta) / (1 + exp(eta)); 		    	}	
+	        if (dLinks[j]=="Log") 	   		    { mean = exp(eta); 				    				}	
+            if (dLinks[j]=="Identity")	        { mean = eta;                                       }
+
+	        // compute conjugate power prior;
+	        if ( (dataTypes[j]=="Bernoulli") | (dataTypes[j]=="Binomial") )
+	        {	
+	            lc += a0[j]*( y * log(mean) + (n-y) * log(1-mean) );           	
+	        }
+	        if (dataTypes[j]=="Normal")
+	        {	
+				lc += a0[j]*( n*log(theta0[2+z])/2 - theta0[2+z]*( (n-1)*sd*sd+n*(y-mean)*(y-mean) )/2);
+                lc += ( (0.1-1)*log(theta0[2+z]) - 0.1*theta0[2+z] ) /2;
+            }	
+	    } 	
+	  }
+	}
+ 
+	lc += c_inv[j][h];
+	return lc;
+}	
+	
+// compute the full conditional likelihood
+double glm_mcmc::logFC(const arma::vec & parm0, const int & j, const arma::vec & cov)   
+{
+	// extract regression parameters;
+	arma::vec theta0 = parm0;
+    double mean, eta, n, y, ss, lp = 0;
+	 	 
+	if (cov[j] == 1)
+	{
+      for (int z=0;z<2;z++)
+	  {
+	    for (int x=0;x<2;x++)
+	    {
+		    n = oss[j].n(x,z);
+			y = oss[j].y(x,z);
+	        if (dataTypes[j]=="Normal")
+	        {	
+		        ss = oss[j].sd(x,z);
+	        }  
+			
+			eta = theta0[0]+theta0[1]*z+theta0[2]*x; 
+	        if (dLinks[j]=="Logistic") 		    { mean = exp(eta) / (1 + exp(eta)); 		    	}	
+	        if (dLinks[j]=="Log") 	   		    { mean = exp(eta); 				    				}	
+            if (dLinks[j]=="Identity")	        { mean = eta;                                       }
+
+	        // compute likelihood contribution;
+	        if ((dataTypes[j]=="Bernoulli") | (dataTypes[j]=="Binomial"))	
+			{	
+			    lp +=  y * log(mean) + (n-y) * log(1-mean) ;                                       
+			}
+	        if (dataTypes[j]=="Normal")			                        
+			{	
+                lp += n*log(theta0[3+z])/2 - theta0[3+z]*( ss+n*(y-mean)*(y-mean) )/2 - n*log(2*3.1415926)/2 ;				
+			}		
+	    }
+	  }
+	}
+	else if (cov[j] == 0)
+	{
+	    for (int z=0;z<2;z++)
+	    {
+		    n = oss[j].n(0,z);
+			y = oss[j].y(0,z);
+	        if (dataTypes[j]=="Normal")
+	        {	
+		        ss = oss[j].sd(0,z);
+	        }  
+			
+			eta = theta0[0]+theta0[1]*z; 
+	        if (dLinks[j]=="Logistic") 		    { mean = exp(eta) / (1 + exp(eta)); 		    	}	
+	        if (dLinks[j]=="Log") 	   		    { mean = exp(eta); 				    				}	
+            if (dLinks[j]=="Identity")	        { mean = eta;                                       }
+			
+			// compute likelihood contribution;
+	        if ((dataTypes[j]=="Bernoulli") | (dataTypes[j]=="Binomial"))	
+			{	
+			    lp +=  y * log(mean) + (n-y) * log(1-mean) ;                                       
+			}
+	        if (dataTypes[j]=="Normal")			                        
+			{	
+                lp += n*log(theta0[2+z])/2 - theta0[2+z]*( ss+n*(y-mean)*(y-mean) )/2 - n*log(2*3.1415926)/2;				
+			}		
+		}
+	}
+	
+	return  lp;
+}
+	
+	
+// generate model index following multinomial distribution;
+arma::rowvec models(const std::vector<arma::vec> & parmss, glm_mcmc & b, const arma::vec & cov)	
+{
+    arma::vec post_temp, post, prob;	
+	arma::mat postp(pow(2,b.K0),b.K0);
+	
+	for (int i=0;i<b.K0;i++)
+	{
+		for (int k=0;k<pow(2,b.K0);k++)
+		{
+		    int h = b.grid(k,i);
+			postp(k,i) = b.logCP(parmss[i],i,h,cov);
+		}
+	}
+
+	post_temp = sum(postp,1) + log(b.pmp);
+	post = post_temp - post_temp.max(); 
+	prob = exp(post)/ sum(exp(post));
+	
+	int k = prob.size();
+    arma::ivec ans(k);
+    rmultinom(1, prob.begin(), k, ans.begin());
+	int index = ans.index_max();
+	arma::rowvec H = b.grid.row(index);
+	
+	return H;
+}	
+
+	
+// generate parameter samples using slice sampling;	
+void slice(arma::vec & parms, glm_mcmc & b, const int & j, const arma::vec & cov, const arma::rowvec & H)  
+{
+
+	double b0, f0, f0_L, f0_R, f0_x1, h0, L, R, V, J, K, w, lower, upper;
+    arma::vec parm0;	
+
+    int h = H[j];
+	for (int p = 0; p < b.P[j]; p++) 
+	{	
+		// create vector of parameters to modify for slice sampling;
+		parm0 = parms;
+
+		// extract slice width and parameter bounds;
+        w     = b.slice_widths[p];
+        lower = b.lower_limits[j][p];
+        upper = b.upper_limits[p];	
+
+		// skip over fixed parameter values;
+		if (lower==upper){parms(p) = lower;} 
+        else
+        {
+			// current value of the parameter in question;
+			b0 = parm0(p);
+		
+			// calculate current full conditional value;
+			f0 = b.logCP(parm0,j,h,cov) + b.logFC(parm0,j,cov);
+
+			// calculate height of the horizontal slice;
+			h0 = f0 - R::rexp(1.0);		
+
+			// Calculate initial horizontal interval;
+			L = parm0(p) - R::runif(0.0,1.0)*w;
+			R = L+w;  
+
+			// Truncate bounds to support of the parameter space;
+			L = std::max(L,lower);
+			R = std::min(R,upper);
+			  
+			// Step out;
+			V = R::runif(0.0,1.0);
+			J = floor(b.m*V);
+			K = (b.m-1)-J;
+
+			// compute log of full conditional at current boundaries;
+			parm0(p) = L; f0_L = b.logCP(parm0,j,h,cov) + b.logFC(parm0,j,cov);
+			parm0(p) = R; f0_R = b.logCP(parm0,j,h,cov) + b.logFC(parm0,j,cov); 
+
+			while(J>0 and h0<f0_L and L>=lower)
+			{
+				L        = L-w; if (L<=lower) {L=lower;}
+				J        = J-1;
+				parm0(p) = L; 
+				f0_L     = b.logCP(parm0,j,h,cov) + b.logFC(parm0,j,cov); 
+			}
+			while(K>0 and h0<f0_R and R<=upper)
+			{
+				R        = R+w; if (R>=upper) {R=upper;}
+				K        = K-1;
+				parm0(p) = R; 
+				f0_R     = b.logCP(parm0,j,h,cov) + b.logFC(parm0,j,cov); 
+			}				
+
+			// perform rejection sampling;
+			int stop  = 0;
+			while(stop == 0)
+			{
+				parm0(p)     = L + R::runif(0.0,1.0)*(R-L);
+				f0_x1        = b.logCP(parm0,j,h,cov) + b.logFC(parm0,j,cov);
+
+				if      ( h0       <  f0_x1 ) { parms(p) = parm0(p); stop = 1;  }
+				else if ( parm0(p) <  b0    ) { L = parm0(p);                     }
+				else if ( parm0(p) >= b0    ) { R = parm0(p);                     }
+
+				if (-0.0000000001 <= L-R and L-R <= 0.0000000001)
+				{
+					parms(p)= 0.5*(L+R);
+					stop      = 1;
+				}
+			}	
+        }
+	}
+
+} 
+	
+	
+	
+   // [[Rcpp::export]]
+    Rcpp::List BMA_Design (std::vector<std::string> dataTypes0, std::vector<std::string> dLinks0, arma::vec nMaxBasket0, int K00, arma::vec pmp0, Rcpp::List priorStats0, 
+                           arma::vec a00, std::vector<arma::vec> trueParms0, std::vector<arma::vec> c_inv0, arma::vec piZ0, std::vector<arma::vec> piX0, 
+						   std::vector<arma::vec> init_theta0, std::vector<arma::vec> lower_limits0, arma::vec upper_limits0, arma::vec slice_widths0, arma::vec eParms, 
+						   arma::mat oParms, arma::vec ppEffCrit, arma::vec ppFutCrit, int nSims, arma::vec cov0, std::vector<std::string> output,
+						   int nBI=500, int nMC = 1500)
+    {   
+   
+   		// initialize random number generator;
+		RNGScope scope;  
+		
+		// Construct container for mcmc samples;
+	    arma::field<arma::mat> samples(K00);
+
+	    // create parameter vector container and initial values for chain i;	
+	    std::vector<arma::vec> parmsl = init_theta0;
+
+		// calculate total number of subjects;
+		int nMax = sum(nMaxBasket0);
+		
+		// calculate enrollment distrution scale parameters;
+		arma::vec eScales = 1.0 / eParms;		
+		
+		// create container for data generation parameters;
+		// dgp = data generation parameters;
+		std::vector<arma::vec> dgp = trueParms0;
+		
+		// containers for simulation results;
+		arma::mat all_PostProbs(nSims,K00);
+		arma::mat all_PostMean0(nSims,K00);
+		arma::mat all_PostMean1(nSims,K00);
+		arma::mat all_PostOuts(nSims,K00);
+		arma::mat all_Efficacy(nSims,K00     ,arma::fill::zeros);
+		arma::mat all_Futility(nSims,K00     ,arma::fill::zeros);
+		arma::mat all_Indeterminate(nSims,K00,arma::fill::zeros);
+		arma::mat all_n(nSims,K00,arma::fill::zeros);
+				
+		arma::mat all_durations(nSims,K00,arma::fill::zeros);
+		arma::vec all_fwr(nSims,arma::fill::zeros);
+		arma::vec all_numRejectCorrect(nSims,arma::fill::zeros);
+		
+	// ---------------------------------------------------------------------------------------------------
+	
+		// create container for prior summary statistics;
+		// pss = prior summary statistics;
+		std::vector<basketSumStat> pss0(K00);
+		for (int k=0;k<K00;k++)
+		{
+			basketSumStat dat;
+			
+			if (cov0[k] == 1)
+			{
+			    for (int z=0;z<=1;z++)
+			    {
+			        for (int x=0;x<=1;x++)
+				    {			    
+					    dat.n(x,z) = (z*piZ0[k]+(1-z)*(1-piZ0[k]))*nMaxBasket0[k]*(x*piX0[z][k]+(1-x)*(1-piX0[z][k]));
+
+				        if ( (dataTypes0[k]=="Bernoulli") | (dataTypes0[k]=="Binomial") )
+				        {
+					        dat.y(x,z)  = as<arma::mat>( priorStats0[k] )(x,z) * dat.n(x,z);
+				        }
+				        else if (dataTypes0[k]=="Normal")
+				        {
+					        double y  = as<arma::mat>( as<Rcpp::List>( priorStats0[k] )[0] )(x,z);
+					        double sd = as<arma::mat>( as<Rcpp::List>( priorStats0[k] )[1] )(x,z);
+					
+					        dat.y(x,z)  = y;
+					        dat.sd(x,z) = sd;   
+				        }
+				    }				
+			    }	
+			}
+			else if (cov0[k] == 0)
+			{
+			    for (int z=0;z<=1;z++)
+			    {
+				    dat.n(0,z) = (z*piZ0[k]+(1-z)*(1-piZ0[k]))*nMaxBasket0[k];
+
+				    if ( (dataTypes0[k]=="Bernoulli") | (dataTypes0[k]=="Binomial") )
+				    {
+					    dat.y(0,z)  = as<arma::vec>( priorStats0[k] )[z] * dat.n(0,z);
+				    }
+				    else if (dataTypes0[k]=="Normal")
+				    {
+					    double y  = as<arma::vec>( as<Rcpp::List>( priorStats0[k] )[0] )[z];
+					    double sd = as<arma::vec>( as<Rcpp::List>( priorStats0[k] )[1] )[z];
+					
+					    dat.y(0,z)  = y;
+					    dat.sd(0,z) = sd;   
+				    }
+				}
+			}
+		
+			pss0[k] = dat;
+		} 
+
+
+	// ---------------------------------------------------------------------------------------------------
+		
+		for (int s=0;s<nSims;s++)
+		{
+            // allocate a data object for one subject;
+			datObj d;
+			
+			// allocate data object container for all possible subjects;
+			std::vector<datObj> bData(nMax);
+			std::vector<arma::vec> cov_bc(K00);
+			
+			// allocate data object container for sufficient statistics;
+		    std::vector<arma::mat> suff_stat(K00);
+		
+			// simulate the data for all subjects and baskets;
+			int indx=0;
+			for (int k=0;k<K00;k++)
+			{
+			    if ( (dataTypes0[k]=="Bernoulli") | (dataTypes0[k]=="Binomial") )
+				{
+					suff_stat[k].set_size(4,2);						
+				}
+				else if (dataTypes0[k]=="Normal")
+				{
+					suff_stat[k].set_size(4,3);	
+				}	
+				suff_stat[k].zeros();	
+
+                cov_bc[k].set_size(nMaxBasket0[k]);	
+                cov_bc[k].zeros();				
+				int n_bc = 0;
+				
+				double cumTime = 0;
+				for (int n=0;n<nMaxBasket0[k];n++)
+				{
+					d.q       = k;
+					cumTime   = cumTime + R::rexp(eScales[k]);
+					d.et      = cumTime;                           // simulate enrollment time;
+					d.at      = R::rnorm(oParms(k,0),oParms(k,1));     // simulate response ascertainment time;
+					d.ft      = d.et + d.at;                       // calculate total follow-up time;
+					
+					d.z       = R::rbinom(1,piZ0[k]);               // simulate 1:1 randomization;
+					
+					double eta;
+					
+					if (cov0[k] == 1)
+					{
+					    d.bc         = R::rbinom(1,piX0[d.z][k]);               // simulate randomization follow piX;
+						eta          = dgp[k][0] + dgp[k][1]*d.z + dgp[k][2]*d.bc;	
+                        cov_bc[k][n_bc] = d.bc;						
+					}
+					else if (cov0[k] == 0)
+					{
+					    d.bc         = 0;
+						eta          = dgp[k][0] + dgp[k][1]*d.z; 
+					}
+					double mean  = means(eta,dLinks0[k]);				
+					
+					// simulate response;
+					if ( (dataTypes0[k]=="Bernoulli") | (dataTypes0[k]=="Binomial") )
+					{ 
+						d.y          = R::rbinom(1,mean); 
+					}
+					else if (dataTypes0[k]=="Normal")
+					{
+						double tau   = dgp[k][2 + (int)(cov0[k]==1) + d.z];
+						d.y          = R::rnorm(mean,1/sqrt(tau)); 
+					}
+					bData[indx] = d;
+					indx++;
+					n_bc++;
+				}
+
+			}
+			
+			// put the data in chronological order based on outcome ascertainment;
+			std::sort(bData.begin(), bData.end(), compare_follow_up_time);			
+						
+			// determine the time at which each of the K0 analyses takes place;
+			arma::irowvec nCount(K00,arma::fill::zeros);
+			arma::irowvec unsorted_nTrig(K00,arma::fill::zeros);
+			arma::rowvec  duration(K00,arma::fill::zeros);
+			
+			for (int n=0;n<nMax;n++)
+			{
+				int k = bData[n].q;
+				nCount[k]+=1;
+				
+				if ( nCount[k]==nMaxBasket0[k] ) 
+				{ 
+					unsorted_nTrig[k]    = n; 
+					duration[k] = bData[n].ft;
+				}
+			}
+			
+// ---------------------------------------------------------------------------------------------------
+
+			arma::irowvec nTrig = sort(unsorted_nTrig);
+			
+			// container for whether enrollment is open in a basket (1=Yes;0=No)
+			arma::irowvec active(K00,arma::fill::ones);			
+			
+			// hypothesis testing result for basket (1=Efficacy;-1=Futility;0=Indeterminate)
+			arma::irowvec decision(K00,arma::fill::zeros);
+
+			// containers for final study data;
+			arma::irowvec nVec(K00, arma::fill::zeros);	
+
+		    // containers for final study results;
+		    arma::rowvec basket_specific_pp(K00);				
+			arma::rowvec basket_specific_m0(K00);
+			arma::rowvec basket_specific_m1(K00);
+			arma::rowvec basket_specific_out(K00);
+				
+			
+			// loop over K0 analyzes;
+			for (int i=0;i<K00;i++)
+			{
+            // -------------------------------------------------------------------
+				//accumulate data up to current interim analysis;	
+				
+				int nStart,nStop;
+				if (i==0) 
+				{
+					nStart = 0; 
+					nStop  = nTrig[i];
+				}
+				else
+				{
+					nStart = nTrig[i-1]+1;
+					nStop  = nTrig[i];
+				}
+			
+				for (int n=nStart;n<=nStop;n++)
+				{
+					int q       = bData[n].q;         // basket for current observation;
+					
+					if (active[q]==1)
+					{
+						int z       = bData[n].z;     // treatment group for current basket;
+						
+						int bc      = bData[n].bc;     // baseline covariate for current basket;
+						
+						double y    = bData[n].y;	  // data value for current observation;
+
+						nVec[q]     +=1;			  // increment sample size for basket;
+						
+						suff_stat[q](2*bc+z,0) += 1;       // increment sample size for treatment group within basket;
+						suff_stat[q](2*bc+z,1) += y;       // increment sum of values for treatment group within basket;
+						
+						if (dataTypes0[q]=="Normal")
+						{
+							suff_stat[q](2*bc+z,2) += y*y; // increment sum of squares for treatment group within basket;
+						}			
+					}
+				}
+				
+			// -------------------------------------------------------------------------
+			
+				// compute summary statistics based on current data;
+				// bss = basket summary statistics;
+				std::vector<basketSumStat> oss0(K00);
+				
+				for (int k=0;k<K00;k++)
+				{
+					basketSumStat dat;
+					
+					if (cov0[k] == 1)
+					{
+					  for (int z=0;z<=1;z++)
+					  {
+					    for (int x=0;x<=1;x++)
+						{
+						
+						    dat.n(x,z) = suff_stat[k](2*x+z,0);
+						    dat.y(x,z) = suff_stat[k](2*x+z,1);
+						
+						    if (dataTypes0[k]=="Normal")
+						    {
+							    dat.y(x,z)  = dat.y(x,z)/dat.n(x,z);
+							    dat.sd(x,z) = suff_stat[k](2*x+z,2) - dat.n(x,z)*dat.y(x,z)*dat.y(x,z);
+						    }					
+						}
+					  }			
+					}
+					else if (cov0[k] == 0)
+					{
+					    for (int z=0;z<=1;z++)
+					    {
+						    dat.n(0,z) = suff_stat[k](z,0);
+						    dat.y(0,z) = suff_stat[k](z,1);
+							
+							if (dataTypes0[k]=="Normal")
+						    {
+							    dat.y(0,z)  = dat.y(0,z)/dat.n(0,z);
+							    dat.sd(0,z) = suff_stat[k](z,2) - dat.n(0,z)*dat.y(0,z)*dat.y(0,z);
+						    }	
+						}
+					}							
+					
+					oss0[k] = dat;
+				} 
+				
+				// declare generalized regression object and set values;	
+	            glm_mcmc b(dataTypes0, dLinks0, nMaxBasket0, K00, pmp0, priorStats0, a00, trueParms0, c_inv0, piZ0, piX0, lower_limits0, upper_limits0, slice_widths0, pss0, oss0, cov0);
+                
+				
+			    for (int j=0;j<K00;j++)
+			    {
+				    arma::mat samples_temp(nMC,b.P[j],arma::fill::zeros);
+			        samples[j] = samples_temp;
+			    }
+			
+                for (int s=-nBI;s<nMC;s++)
+			    {
+				    arma::rowvec M = models(parmsl, b, cov0);	
+					for (int j=0;j<K00;j++)
+	                {	
+                        slice(parmsl[j],b,j,cov0,M);											
+				        if (s>=0){	samples[j].row(s) = parmsl[j].t();    }	
+					}					
+	            }
+
+				
+				// determine the posterior posterior probability and the mean difference;
+				arma::mat I_pp(nMC,K00,arma::fill::zeros);
+				arma::mat I_m0(nMC,K00);
+				arma::mat I_m1(nMC,K00);
+				arma::mat I_out(nMC,K00);
+				
+				for (int j=0;j<K00;j++)
+				{
+				    for (int s=0;s<nMC;s++)
+					{	
+					    I_m0(s,j) = samples[j](s,0);
+						I_m1(s,j) = samples[j](s,1);
+						double mean1 = 0, mean0 = 0;
+						
+						if (dLinks0[j]=="Identity")	       
+						{ 
+						    mean1 = samples[j](s,1) + samples[j](s,0); 
+                            mean0 = samples[j](s,0);								
+						}
+						
+					    if (dLinks0[j]=="Logistic") 
+						{
+						    if (cov0[j] == 0)		
+							{ 
+							    mean1 = exp(samples[j](s,1) + samples[j](s,0)) / (1 + exp(samples[j](s,1) + samples[j](s,0)));
+								mean0 = exp(samples[j](s,0))/(1+exp(samples[j](s,0)));   	
+						    }
+							else if (cov0[j]==1)
+							{
+							    for (int n=0;n<nMaxBasket0[j];n++)
+								{
+								    mean1 += 1/nMaxBasket0[j] * exp(samples[j](s,1) + samples[j](s,0) + samples[j](s,2)*cov_bc[j][n]) / (1 + exp(samples[j](s,1) + samples[j](s,0) + samples[j](s,2)*cov_bc[j][n]));
+									mean0 += 1/nMaxBasket0[j] * exp(samples[j](s,0) + samples[j](s,2)*cov_bc[j][n]) / (1 + exp(samples[j](s,0) + samples[j](s,2)*cov_bc[j][n]));
+		                        }
+							}
+                           
+						}
+                        
+					    if ( (output[j]=="MD") | (output[j]=="RD") )
+					    {
+						    I_out(s,j) = mean1 - mean0;
+						}
+						else if ( output[j]=="OR" )
+					    {
+						    I_out(s,j) = mean1*(1-mean0)/( mean0*(1-mean1) ) ;
+						}
+							
+						if (samples[j](s,1) > 0) { I_pp(s,j) = 1; }
+					}										   
+				}
+				
+				basket_specific_pp  = mean(I_pp);
+				basket_specific_m0  = mean(I_m0);
+				basket_specific_m1  = mean(I_m1);
+				basket_specific_out = mean(I_out);
+				
+                for (int k=0;k<K00;k++)
+				{
+					if      ((basket_specific_pp[k]>=ppEffCrit[k]) and (nVec[k] == nMaxBasket0[k])                                            ) { active[k] = 0; decision[k] =  1;   }
+					else if ((basket_specific_pp[k]<=ppFutCrit[k]) and (nVec[k] >= (int) nMaxBasket0[k]*0.5) and (nVec[k] <  nMaxBasket0[k])  ) { active[k] = 0; decision[k] = -1;   }				
+				}
+				
+				if (max(active)==0) 
+				{ 
+					i=10000;
+				}	
+				
+			}	
+			
+			all_PostProbs.row(s)     = basket_specific_pp;
+			all_PostMean0.row(s)     = basket_specific_m0;
+			all_PostMean1.row(s)     = basket_specific_m1;
+			all_PostOuts.row(s)      = basket_specific_out;
+			
+			for (int k=0;k<K00;k++)
+			{
+				if (decision[k]==1)       {all_Efficacy(s,k) = 1.0;     }
+				else if (decision[k]==-1) {all_Futility(s,k) = 1.0;     }
+				else                      {all_Indeterminate(s,k) = 1.0;}	
+					
+				if ( (decision[k]==1) and (dgp[k][1]<=dgp[k][0]) ) { all_fwr[s] = 1;}
+				if ( (decision[k]==1) and (dgp[k][1]>dgp[k][0])  ) { all_numRejectCorrect[s] += 1; }
+							
+			}			
+
+			arma::rowvec nVecDouble = arma::conv_to<arma::rowvec>::from(nVec);				
+			all_n.row(s) = nVecDouble;
+			all_durations.row(s) = duration;
+						
+		}
+	// --------------------------------------------------------------------------------------------------- 
+
+		Rcpp::List PE = Rcpp::List::create(  
+											Rcpp::Named("b0")       = mean(all_PostMean0),
+											Rcpp::Named("b1")       = mean(all_PostMean1),
+											Rcpp::Named("est")      = mean(all_PostOuts),
+											Rcpp::Named("pp")       = mean(all_PostProbs)
+										  );
+														
+		Rcpp::List HT = Rcpp::List::create(  
+											Rcpp::Named("eff")      = mean(all_Efficacy),								  
+											Rcpp::Named("fut")      = mean(all_Futility),								  
+											Rcpp::Named("ind")      = mean(all_Indeterminate),
+											Rcpp::Named("fwer")     = mean(all_fwr),
+											Rcpp::Named("ncr")      = mean(all_numRejectCorrect)
+										  );
+																												
+		Rcpp::List SS = Rcpp::List::create(  
+											Rcpp::Named("ave")         = mean(all_n),
+											Rcpp::Named("med")         = median(all_n),								  
+											Rcpp::Named("min")         = min(all_n),
+											Rcpp::Named("max")         = max(all_n)	
+										  );														
+														
+		Rcpp::List DU = Rcpp::List::create(  
+											Rcpp::Named("ave")      = mean(all_durations),
+											Rcpp::Named("med")      = median(all_durations),								  
+											Rcpp::Named("min")      = min(all_durations),
+											Rcpp::Named("max")      = max(all_durations)		
+										  );	
+
+
+
+										  
+		return Rcpp::List::create(
+									Rcpp::Named("PE")    = PE,
+									Rcpp::Named("HT")    = HT,	
+									Rcpp::Named("SS")    = SS,									
+									Rcpp::Named("DR")    = DU							  			  
+								);
+								
+	}
+	
+
+')
