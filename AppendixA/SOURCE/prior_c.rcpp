@@ -1,0 +1,299 @@
+ require(Rcpp);
+ require(RcppArmadillo);
+ require(RcppNumerical);
+
+sourceCpp(code='
+
+   // [[Rcpp::depends(RcppArmadillo)]]
+   // [[Rcpp::depends(RcppEigen)]]
+   // [[Rcpp::depends(RcppNumerical)]]
+   #include <RcppArmadillo.h>
+   #include <RcppNumerical.h> 
+   #include <RcppArmadilloExtensions/sample.h>
+
+ 
+#include <cmath>
+#include <random>
+#include <string>
+#include <vector>
+   
+   using namespace Rcpp;
+   using namespace Numer;  
+   
+//------------------------------------ Class Specific Functions -------------------------------------------//
+class glm_mcmc{
+
+  public:
+	
+	int J;                                // number of indications
+	arma::vec              nMaxBasket;    // sample size
+	Rcpp::List             priorStats;    // prior statistics n, y_bar, (sd)
+	arma::vec              piZ;           // treatment distribution  
+	std::vector<arma::vec> piX;           // baseline covariate distribution  
+	
+	// model definition
+	std::vector<std::string> dType;
+	std::vector<std::string> dLink;
+	
+	std::vector<int> P;
+	
+	// prior information
+	arma::vec a0;                       // vector of powers for power priors
+    arma::vec cov;
+   
+	// slice sampling
+	std::vector<arma::vec>   lower_limits;
+	arma::vec                upper_limits;
+	arma::vec                slice_widths;
+	
+	int m;
+	
+    // public member functions;
+	glm_mcmc(std::vector<std::string> & dType0, std::vector<std::string> & dLink0, int & J0, arma::vec & nMaxBasket0, Rcpp::List & priorStats0, 
+	         arma::vec & a00, std::vector<arma::vec> & piX0, arma::vec & piZ0, std::vector<arma::vec> & lower_limits0, arma::vec & upper_limits0, 
+			 arma::vec & slice_widths0, arma::vec & cov0);
+	
+	double logCP(const arma::vec & parm0, const int & j, const int & h, const arma::vec & cov);    // log of conjugate priors 
+
+};
+
+
+
+glm_mcmc::glm_mcmc(std::vector<std::string> & dType0, std::vector<std::string> & dLink0, int & J0, arma::vec & nMaxBasket0, Rcpp::List & priorStats0, 
+                   arma::vec & a00, std::vector<arma::vec> & piX0, arma::vec & piZ0, std::vector<arma::vec> & lower_limits0, arma::vec & upper_limits0, 
+				   arma::vec & slice_widths0, arma::vec & cov0)
+{
+	J          = J0;
+	nMaxBasket = nMaxBasket0;
+	priorStats = priorStats0;
+	piZ        = piZ0;
+	piX        = piX0;
+	
+	dType      = dType0;
+	dLink      = dLink0;
+	a0         = a00;
+    cov        = cov0;
+	
+    P.resize(J);
+    for (int i=0;i<J;i++)
+	{
+	    P[i] = 2 + (int)(cov[i]==1) + 2*(int) (dType[i]=="Normal");
+	}
+	
+	lower_limits = lower_limits0;
+	upper_limits = upper_limits0;
+	slice_widths = slice_widths0;
+	
+	m=10;
+}
+
+
+double glm_mcmc::logCP(const arma::vec & parm0, const int & j, const int & h, const arma::vec & cov)  
+{
+
+	// extract regression parameters;
+	arma::vec theta0 = parm0, tau;
+    double eta, mean, lc = 0, n, y, sd;
+	
+	if (dType[j]=="Normal")
+	{	
+	   theta0.shed_rows(P[j]-2,P[j]-1); 
+	   tau = parm0.rows(P[j]-2,P[j]-1); 
+	}
+	
+    if (cov[j] == 0)
+	{
+	    for (int z=0;z<2;z++)
+	    {
+	        int hh = z*h;
+	
+	        n = nMaxBasket[j]*(z*piZ[j]+(1-z)*(1-piZ[j]));
+	        if ((dType[j]=="Bernoulli") | (dType[j]=="Binomial"))
+	        {
+	            y = as<arma::vec>( priorStats[j] )[hh]*n;
+	        }
+	        else if (dType[j]=="Normal")
+	        {	
+	            y  = as<arma::vec>( as<Rcpp::List>( priorStats[j] )[0] )[hh];
+		        sd = as<arma::vec>( as<Rcpp::List>( priorStats[j] )[1] )[hh];
+	        }         
+	    
+	        eta = theta0[0]+theta0[1]*z; 
+	        if (dLink[j]=="Logistic") 		    { mean = exp(eta) / (1 + exp(eta)); 		    	}	
+	        if (dLink[j]=="Log") 	   		    { mean = exp(eta); 				    				}	
+            if (dLink[j]=="Identity")	        { mean = eta;                                       }
+
+	        // compute conjugate power prior;
+	        if ( (dType[j]=="Bernoulli") | (dType[j]=="Binomial") )
+	        {	
+	            lc += a0[j]*( y * log(mean) + (n-y) * log(1-mean) );    				
+	        }
+	        if (dType[j]=="Normal")
+	        {	
+	            lc += a0[j]*( n*log(tau[z])/2 - tau[z]*( (n-1)*sd*sd+n*(y-mean)*(y-mean) )/2 );
+                lc += (0.1-1)*log(tau[z]) - 0.1*tau[z];
+            }
+        }			
+	}
+	else if (cov[j] == 1)
+	{	
+	  for (int z=0;z<2;z++)
+	  {
+	    int hh = z*h;
+	    for (int x=0;x<2;x++)
+	    {
+	        n = nMaxBasket[j]*(z*piZ[j]+(1-z)*(1-piZ[j]))*(x*piX[z][j]+(1-x)*(1-piX[z][j]));
+	        if ((dType[j]=="Bernoulli") | (dType[j]=="Binomial"))
+	        {
+	            y = as<arma::mat>( priorStats[j] )(x,hh)*n;
+	        }
+	        else if (dType[j]=="Normal")
+	        {	
+	            y = as<arma::mat>( as<Rcpp::List>( priorStats[j] )[0] )(x,hh);
+		        sd = as<arma::mat>( as<Rcpp::List>( priorStats[j] )[1] )(x,hh);
+	        }         
+	    
+	        eta = theta0[0]+theta0[1]*z+theta0[2]*x; 
+	        if (dLink[j]=="Logistic") 		    { mean = exp(eta) / (1 + exp(eta)); 		    	}	
+	        if (dLink[j]=="Log") 	   		    { mean = exp(eta); 				    				}	
+            if (dLink[j]=="Identity")	        { mean = eta;                                       }
+
+	        // compute conjugate power prior;
+	        if ( (dType[j]=="Bernoulli") | (dType[j]=="Binomial") )
+	        {	
+	            lc += a0[j]*( y * log(mean) + (n-y) * log(1-mean) );  				
+	        }
+	        if (dType[j]=="Normal")
+	        {	
+	            lc += a0[j]*( n*log(tau[z])/2 - tau[z]*( (n-1)*sd*sd+n*(y-mean)*(y-mean) )/2 );
+				lc += ( (0.1-1)*log(tau[z]) - 0.1*tau[z] ) /2;
+            }	
+			
+	    } 	
+	  }
+    }
+	return lc;
+}
+
+
+void slice( arma::vec & parms, glm_mcmc & b, const int & j, const int & h, const arma::vec & cov)  
+{
+
+	double b0, f0, f0_L, f0_R, f0_x1, h0, L, R, V, J, K, w, lower, upper;
+    arma::vec parm0;
+	
+	for (int p = 0; p < b.P[j]; p++) 
+	{	
+		// create vector of parameters to modify for slice sampling;
+		parm0 = parms;
+
+		// extract slice width and parameter bounds;
+        w     = b.slice_widths[p];
+        lower = b.lower_limits[j][p];
+        upper = b.upper_limits[p];	
+
+		// skip over fixed parameter values;
+		if (lower==upper){parms(p) = lower;} 
+        else
+        {
+			// current value of the parameter in question;
+			b0 = parm0(p);
+		
+			// calculate current full conditional value;
+			f0 = b.logCP(parm0,j,h,cov);
+
+			// calculate height of the horizontal slice;
+			h0 = f0 - R::rexp(1.0);		
+
+			// Calculate initial horizontal interval;
+			L = parm0(p) - R::runif(0.0,1.0)*w;
+			R = L+w;  
+
+			// Truncate bounds to support of the parameter space;
+			L = std::max(L,lower);
+			R = std::min(R,upper);
+			  
+			// Step out;
+			V = R::runif(0.0,1.0);
+			J = floor(b.m*V);
+			K = (b.m-1)-J;
+
+			// compute log of full conditional at current boundaries;
+			parm0(p) = L; f0_L = b.logCP(parm0,j,h,cov);
+			parm0(p) = R; f0_R = b.logCP(parm0,j,h,cov); 
+
+			while(J>0 and h0<f0_L and L>=lower)
+			{
+				L        = L-w; if (L<=lower) {L=lower;}
+				J        = J-1;
+				parm0(p) = L; 
+				f0_L     = b.logCP(parm0,j,h,cov); 
+			}
+			while(K>0 and h0<f0_R and R<=upper)
+			{
+				R        = R+w; if (R>=upper) {R=upper;}
+				K        = K-1;
+				parm0(p) = R; 
+				f0_R     = b.logCP(parm0,j,h,cov); 
+			}				
+
+			// perform rejection sampling;
+			int stop  = 0;
+			while(stop == 0)
+			{
+				parm0(p)     = L + R::runif(0.0,1.0)*(R-L);
+				f0_x1        = b.logCP(parm0,j,h,cov);
+
+				if      ( h0       <  f0_x1 ) { parms(p) = parm0(p); stop = 1;  }
+				else if ( parm0(p) <  b0    ) { L = parm0(p);                     }
+				else if ( parm0(p) >= b0    ) { R = parm0(p);                     }
+
+				if (-0.0000000001 <= L-R and L-R <= 0.0000000001)
+				{
+					parms(p)= 0.5*(L+R);
+					stop      = 1;
+				}
+			}	
+        }
+	}
+} 
+
+
+// [[Rcpp::export]]
+arma::field<arma::mat> mcmc_blm(std::vector<std::string> & dType0, std::vector<std::string> & dLink0, int & J0, arma::vec & nMaxBasket0, Rcpp::List & priorStats0, 
+                                arma::vec & a00, std::vector<arma::vec> & init_theta0, std::vector<arma::vec> & piX0, arma::vec & piZ0, 
+								std::vector<arma::vec> & lower_limits0, arma::vec & upper_limits0, arma::vec & slice_widths0, arma::vec & cov0, 
+								int nBI=500, int nC = 1500)
+{
+    
+	Rcpp::RNGScope scope;   
+	
+	// declare generalized regression object and set values;	
+	glm_mcmc b(dType0, dLink0, J0, nMaxBasket0, priorStats0, a00, piX0, piZ0, lower_limits0, upper_limits0, slice_widths0, cov0);
+
+    // Construct container for mcmc samples;
+	arma::field<arma::mat> samples_c(2*J0);
+
+	// create parameter vector container and initial values for chain i;	
+	std::vector<arma::vec> parmsl = init_theta0;  
+	
+	for (int j=0;j<J0;j++)
+	{
+	    for (int h=0;h<2;h++)
+		{
+			arma::vec parms = parmsl[j];
+			arma::mat samples_temp(nC,b.P[j]);
+		    for (int s=-nBI;s<nC;s++)
+			{
+			    slice(parms,b,j,h,cov0);
+				if (s>=0){	samples_temp.row(s) = parms.t();	}
+			}
+			samples_c[2*j+h] = samples_temp;
+		}
+	}
+
+	return samples_c;
+} 
+
+
+')
