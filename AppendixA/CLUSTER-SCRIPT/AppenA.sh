@@ -10,4 +10,4 @@
 #SBATCH --array=1-200
 
 ## run R command
-R CMD BATCH "--no-save --args $SLURM_ARRAY_TASK_ID" ./programs/powers.R ./cluster-logs/power-$SLURM_ARRAY_TASK_ID.Rout
+R CMD BATCH "--no-save --args $SLURM_ARRAY_TASK_ID" ./programs/bma_A.R ./cluster-logs/bma_A-$SLURM_ARRAY_TASK_ID.Rout
