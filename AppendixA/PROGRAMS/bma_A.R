@@ -5,7 +5,7 @@ node.idx = as.numeric(args[1])
 ########## compile ############
 
 setwd("C:/D/BMA/simulation/cov")
-source("data_all_cov.rcpp")
+source("source-bma-A.rcpp")
 source("prior_c.rcpp")
 
 ############ set up #############
