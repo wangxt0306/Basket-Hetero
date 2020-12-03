@@ -123,7 +123,7 @@ PROGRAMS       --- contains R code to call the Rcpp programs and save the desire
 
 RESULTS        --- contains an example result file of a different endpoints case
 
-Inputs of bma-A.R:
+Inputs of bma_A.R:
 
      nSims          ----  number of simulation studies to perform
 
