@@ -119,7 +119,7 @@ SOURCE         --- contains Rcpp program used to generate operating characterist
 
 PROGRAMS       --- contains R code to call the Rcpp programs and save the desired results
                    
-		   bma-A.R: Contains inputs corresponding to a different endpoints case and outputs results for TableA1-A2
+		   bma_A.R: Contains inputs corresponding to a different endpoints case and outputs results for TableA1-A2
 
 RESULTS        --- contains an example result file of a different endpoints case
 
