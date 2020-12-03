@@ -30,23 +30,23 @@ RESULTS_MIXED    --- contains an example result file of a different endpoints ca
 
 Inputs for R programs (bhm_binomial.R and bhm_mixed.R have the same types of inputs): 
 
-nSims          ----  number of simulation studies to perform
+    nSims          ----  number of simulation studies to perform
 
-nMC            ----  number of MCMC samples per analysis
+    nMC            ----  number of MCMC samples per analysis
 
-K0             ----   number of baskets (i.e., indications)
+    K0             ----   number of baskets (i.e., indications)
 
-data.types     ----   data type for each indication
+    data.types     ----   data type for each indication
 
-out.Parms      ----   normal distribution parameters for outcome ascertainment times
+    out.Parms      ----   normal distribution parameters for outcome ascertainment times
 
-target.n       ----   targeted sample size
+    target.n       ----   targeted sample size
 
-ppEffCrit      ----   posterior probability critical value (efficacy)
+    ppEffCrit      ----   posterior probability critical value (efficacy)
 
-ppFutCrit      ----  posterior probability critical value (futility)
+    ppFutCrit      ----  posterior probability critical value (futility)
 
-true.parms     ----   model parameters for data generation for each basket in list format
+    true.parms     ----   model parameters for data generation for each basket in list format
 
 
 ----------------------------------------------------	
@@ -78,27 +78,27 @@ RESULTS_MIXED    --- contains an example result file of a different endpoints ca
 
 Inputs for R programs (bma_binomial.R and bma_mixed.R have the same types of inputs): 
 
-nSims           ----  number of simulation studies to perform
+    nSims           ----  number of simulation studies to perform
 
-K0              ----   number of baskets (i.e., indications)
+    K0              ----   number of baskets (i.e., indications)
 
-data.types      ----   data type for each indication
+    data.types      ----   data type for each indication
 
-enr.Parms       ----   rate parameter for exponential interarrival times for each basket
+    enr.Parms       ----   rate parameter for exponential interarrival times for each basket
 
-out.Parms       ----   normal distribution parameters for outcome ascertainment times
+    out.Parms       ----   normal distribution parameters for outcome ascertainment times
 
-target.n        ----   targeted sample size
+    target.n        ----   targeted sample size
 
-ppEffCrit       ----   posterior probability critical value (efficacy)
+    ppEffCrit       ----   posterior probability critical value (efficacy)
 
-ppFutCrit       ----  posterior probability critical value (futility)
+    ppFutCrit       ----  posterior probability critical value (futility)
 
-prior.stats     ----  sufficient statistics for conjugate priors for each basket in list format
+    prior.stats     ----  sufficient statistics for conjugate priors for each basket in list format
 
-a0              ----   value of power in conjugate power prior;
+    a0              ----   value of power in conjugate power prior;
 
-true.parms      ----   model parameters for data generation for each basket in list format
+    true.parms      ----   model parameters for data generation for each basket in list format
 
 
 --------------------------------------------------------
@@ -125,42 +125,42 @@ RESULTS        --- contains an example result file of a different endpoints case
 
 Inputs of bma-A.R:
 
-nSims          ----  number of simulation studies to perform
+     nSims          ----  number of simulation studies to perform
 
-K0             ----   number of baskets (i.e., indications)
+     K0             ----   number of baskets (i.e., indications)
 
-covs           ----  whether there is a binary covariate, 0 = no, 1 = yes
+     covs           ----  whether there is a binary covariate, 0 = no, 1 = yes
 
-data.types     ----   data type for each indication
+     data.types     ----   data type for each indication
 
-data.links     ----   GLM links 
+     data.links     ----   GLM links 
 
-output         ----   output risk/mean difference
+     output         ----   output risk/mean difference
 
-enr.Parms      ----   rate parameter for exponential interarrival times for each basket
+     enr.Parms      ----   rate parameter for exponential interarrival times for each basket
 
-out.Parms      ----   normal distribution parameters for outcome ascertainment times
+     out.Parms      ----   normal distribution parameters for outcome ascertainment times
 
-target.n       ----   targeted sample size
+     target.n       ----   targeted sample size
 
-ppEffCrit      ----   posterior probability critical value (efficacy)
+     ppEffCrit      ----   posterior probability critical value (efficacy)
 
-ppFutCrit      ----  posterior probability critical value (futility)
+     ppFutCrit      ----  posterior probability critical value (futility)
 
-prior.stats    ----  sufficient statistics for conjugate priors for each basket in list format
+     prior.stats    ----  sufficient statistics for conjugate priors for each basket in list format
 
-a0             ----   value of power in conjugate power prior;
+     a0             ----   value of power in conjugate power prior;
 
-true.parms     ----   model parameters for data generation for each basket in list format
+     true.parms     ----   model parameters for data generation for each basket in list format
 
-init.theta     ----   initial values used for MCMC
+     init.theta     ----   initial values used for MCMC
 
-piZ            ----   distribution parameters of treatment: Ber(piZ)
+     piZ            ----   distribution parameters of treatment: Ber(piZ)
 
-piX            ----   distribution parameters of baseline covariate: Ber(piX)
+     piX            ----   distribution parameters of baseline covariate: Ber(piX)
 
-lower_limits   ----   lower limits for slice sampling
+     lower_limits   ----   lower limits for slice sampling
 
-upper_limits   ----  upper limits for slice sampling
+     upper_limits   ----  upper limits for slice sampling
 
-slice_widths   ----  widths for slice sampling
+     slice_widths   ----  widths for slice sampling
