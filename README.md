@@ -7,16 +7,22 @@ All programs are setup to be executed on a Linux computing cluster using R (3.6.
 Folder “BHM” contains programs needed (shell script, R, Rcpp) to generate the results in the main paper using Bayesian hierarchical model. 
 
 Subfolders:
+
 CLUSTER-SCRIPT   --- contains shell script used to submit programs on clusters
-                     BATCH-BINOMIAL.sh: Shell script to run R program that generates operating characteristics under an identical endpoints case (for example, binary endpoints)
-                     BATCH-MIXED.sh: Shell script to run R program that generates operating characteristics under a different endpoints case
+                     
+		     BATCH-BINOMIAL.sh: Shell script to run R program that generates operating characteristics under an identical endpoints case (for example, binary endpoints)
+                     
+		     BATCH-MIXED.sh: Shell script to run R program that generates operating characteristics under a different endpoints case
 
 SOURCE           --- contains Rcpp program used to generate operating characteristics like type I error rate, power, etc. It takes the inputs from R and also outputs results to R.
-                     souce-bhm.rcpp: Generates estimates of power, type I error rate, bias of posterior mean, etc. for both identical and different endpoints cases. 
+                     
+		     souce-bhm.rcpp: Generates estimates of power, type I error rate, bias of posterior mean, etc. for both identical and different endpoints cases. 
 
 PROGRAMS         --- contains R code to call the Rcpp programs and save the desired results
-                     bhm-binomial.R: Contains inputs corresponding to an identical endpoints case
-                     bhm-mixed.R: Contains inputs corresponding to a different endpoints case
+                     
+		     bhm-binomial.R: Contains inputs corresponding to an identical endpoints case
+                     
+		     bhm-mixed.R: Contains inputs corresponding to a different endpoints case
 
 RESULTS_BINOMIAL --- contains an example result file of an identical endpoints case
 
@@ -48,16 +54,22 @@ true.parms     ----   model parameters for data generation for each basket in li
 Folder “BMA” contains programs needed (shell script, R, Rcpp) to generate the results in the main paper using Bayesian model averaging approach. 
 
 Subfolders:
+
 CLUSTER-SCRIPT   --- contains shell script used to submit programs on clusters
-                     BATCH-BINOMIAL.sh: Shell script to run R program that generates operating characteristics under an identical endpoints case (for example, binary endpoints)
-                     BATCH-MIXED.sh: Shell script to run R program that generates operating characteristics under a different endpoints case
+                     
+		     BATCH-BINOMIAL.sh: Shell script to run R program that generates operating characteristics under an identical endpoints case (for example, binary endpoints)
+                     
+		     BATCH-MIXED.sh: Shell script to run R program that generates operating characteristics under a different endpoints case
 
 SOURCE           --- contains Rcpp program used to generate operating characteristics like type I error rate, power, etc. It takes the inputs from R and also outputs results to R.
-                     souce-bma.rcpp: Generates estimates of power, type I error rate, bias of posterior mean, etc. for both identical and different endpoints cases. 
+                     
+		     souce-bma.rcpp: Generates estimates of power, type I error rate, bias of posterior mean, etc. for both identical and different endpoints cases. 
 
 PROGRAMS         --- contains R code to call the Rcpp programs and save the desired results
-                     bma-binomial.R: Contains inputs corresponding to an identical endpoints case
-                     bma-mixed.R: Contains inputs corresponding to a different endpoints case
+                     
+		     bma-binomial.R: Contains inputs corresponding to an identical endpoints case
+                     
+		     bma-mixed.R: Contains inputs corresponding to a different endpoints case
 
 RESULTS_BINOMIAL --- contains an example result file of an identical endpoints case
 
@@ -94,18 +106,22 @@ true.parms      ----   model parameters for data generation for each basket in l
 Folder “AppendixA” contains programs needed (shell script, R, Rcpp) to generate the results in Appendix A of the supplementary materials. 
 
 Subfolders:
+
 CLUSTER-SCRIPT --- contains shell script used to submit programs on clusters
-                   AppenA.sh: Shell script to run R program that generates operating characteristics under a different endpoints case (for example, binary endpoints)
+                   
+		   AppenA.sh: Shell script to run R program that generates operating characteristics under a different endpoints case (for example, binary endpoints)
                                    
 SOURCE         --- contains Rcpp program used to generate operating characteristics like type I error rate, power, etc. It takes the inputs from R and also outputs results to R.
-                   prior_c.rcpp: Approximates the marginal likelihoods using partition-weighted kernel estimator
-                   souce-bma-A.rcpp: Generates estimates of power, type I error rate, bias of posterior mean, etc. a different endpoints case, using the marginal likelihoods approximated from “prior_c.rcpp”
+                   
+		   prior_c.rcpp: Approximates the marginal likelihoods using partition-weighted kernel estimator
+                   
+		   souce-bma-A.rcpp: Generates estimates of power, type I error rate, bias of posterior mean, etc. a different endpoints case, using the marginal likelihoods approximated from “prior_c.rcpp”
 
 PROGRAMS       --- contains R code to call the Rcpp programs and save the desired results
-                   bma-A.R: Contains inputs corresponding to a different endpoints case and outputs results for TableA1-A2
+                   
+		   bma-A.R: Contains inputs corresponding to a different endpoints case and outputs results for TableA1-A2
 
 RESULTS        --- contains an example result file of a different endpoints case
-
 
 Inputs of bma-A.R:
 
