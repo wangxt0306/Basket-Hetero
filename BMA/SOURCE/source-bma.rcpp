@@ -201,17 +201,17 @@ sourceCpp(code='
 		// create container for prior summary statistics;
 		// pss = prior summary statistics;
 		std::vector<basketSumStat> pss(K0);
-		for (int k=0;k<K0;k++)
+		for (int k=0;k<K0;k++) // loop by K0 number of basket
 		{
-			basketSumStat dat;
+			basketSumStat dat; 
 			
-			for (int z=0;z<=1;z++)
+			for (int z=0;z<=1;z++) // loop by z trt group
 			{
 				dat.n[z] = 0.5*nMaxBasket[k]*a0;
 
 				if (dataTypes[k]=="BINARY")
 				{
-					dat.y[z]  = as<arma::vec>( priorStats[k] )[z] * dat.n[z];
+					dat.y[z]  = as<arma::vec>( priorStats[k] )[z] * dat.n[z]; //predtict data under prior assumption
 				}
 				else if (dataTypes[k]=="NORMAL")
 				{
@@ -229,7 +229,7 @@ sourceCpp(code='
 		
 			if (dataTypes[k]=="BINARY")
 			{
-				dgp[k].set_size(2,1);
+				dgp[k].set_size(2,1); //???
 				dgp[k].col(0) = as<arma::vec>( trueParms[k] );	                      // response rate;			
 			}
 			else if (dataTypes[k]=="NORMAL")
@@ -244,18 +244,18 @@ sourceCpp(code='
 		for (int s=0;s<nSims;s++)
 		{
 			// allocate a data object for one subject;
-			datObj d;
+			datObj d;    // each object has its own datObj d.  
 			
 			// allocate data object container for all possible subjects;
-			std::vector<datObj> bData(nMax);
+			std::vector<datObj> bData(nMax);  // bData(nMax) contain datObj d of each nMax subject. 
 			
 			// allocate data object container for sufficient statistics;
-			std::vector<arma::mat> suff_stat(K0);
-			std::vector<arma::mat> summ_stat(K0);
+			std::vector<arma::mat> suff_stat(K0); // a vector of K0 basket 
+			std::vector<arma::mat> summ_stat(K0); // a vector of K0 basket 
 			
 			// simulate the data for all subjects and baskets;
 			int idx=0;
-			for (int k=0;k<K0;k++)
+			for (int k=0;k<K0;k++) // basket
 			{
 			
 				if (dataTypes[k]=="BINARY")
@@ -274,7 +274,7 @@ sourceCpp(code='
 
 				
 				double cumTime = 0;
-				for (int n=0;n<nMaxBasket[k];n++)
+				for (int n=0;n<nMaxBasket[k];n++) // each subject n in basket K
 				{
 					d.b       = k;
 					cumTime   = cumTime + R::rexp(eScales[k]);
@@ -287,7 +287,7 @@ sourceCpp(code='
 					// simulate response;
 					if (dataTypes[k]=="BINARY")
 					{
-						d.y       = R::rbinom(1,dgp[k](d.z,0)); 
+						d.y       = R::rbinom(1,dgp[k](d.z,0));  // Generate result of each subject
 					}
 					else if (dataTypes[k]=="NORMAL")
 					{
@@ -415,7 +415,7 @@ sourceCpp(code='
 				
 				for (int k=0;k<K0;k++)
 				{
-					for (int h=0;h<=1;h++)
+					for (int h=0;h<=1;h++) //hypothesis?
 					{
 						
 						if (dataTypes[k]=="BINARY")
@@ -436,7 +436,7 @@ sourceCpp(code='
 								alpha[z] +=  bss[k].y[z];
 								beta[z]  += (bss[k].n[z] - bss[k].y[z]);	
 								
-								margLikeValue += lgamma(alpha[z]) + lgamma(beta[z]) - lgamma(alpha[z] + beta[z]);
+								margLikeValue += lgamma(alpha[z]) + lgamma(beta[z]) - lgamma(alpha[z] + beta[z]); // beta function of observed / beta function of predicted
 							}
 							
 							Rcpp::List int_res = integrate_binary(alpha[0],beta[0],alpha[1],beta[1]);
@@ -494,7 +494,7 @@ sourceCpp(code='
 							
 							
 						}						
-					}	
+					} // for each h, it calculated pp, mn, ml for each basket k	
 				}
 
 				
@@ -517,9 +517,9 @@ sourceCpp(code='
 					}
 				}
 				
-				
+				// looks like he is renormalizing the ppmodel
 				double modMax = max(ppModel),sumProb;
-				ppModel = exp(ppModel - modMax);
+				ppModel = exp(ppModel - modMax); 
 				sumProb = sum(ppModel);
 				ppModel = ppModel / sumProb;
 				

@@ -6,7 +6,7 @@ node.idx = as.numeric(args[1]);
 ## set note if running on windows platform;
 if (.Platform$OS.type == "windows") { node.idx = 1 }
 
-if (.Platform$OS.type == "windows") { root.path = "C:/Users/psioda/Desktop/bayesDesignBasketHetero/BMA/SOURCE";          }
+if (.Platform$OS.type == "windows") { root.path = "C:/Users/xw455/OneDrive - Yale University/proj-Wei-clinical trial/Basket-Hetero/BMA/SOURCE";          }
 if (.Platform$OS.type == "unix")    { root.path = "/proj/psiodalab/projects/bayesDesignBasketHetero/BMA/SOURCE";                                          }
 
 setwd(root.path);
